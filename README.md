@@ -45,7 +45,7 @@ gcloud container clusters get-credentials <cluster> --location <location>
 
 If you don't have a cluster yet, you can [create one](https://cloud.google.com/kubernetes-engine/docs/how-to/creating-an-autopilot-cluster).
 
-With prerequisites in place, just run 
+With prerequisites in place, just run
 ```shell
 kubectl apply -f k8s-gke.yaml
 ```
@@ -56,3 +56,39 @@ find the IP address of the ingress:
 kubectl -n nanoproxy get ingress
 ```
 and connect to that address, port 80.
+
+After you're done, don't forget to remove all resources to avoid further charges:
+
+```shell
+kubectl delete -f k8s-gke.yaml
+```
+
+# Running on AWS with Kubernetes
+
+Kubernetes manifest that work for AWS EKS are provided.
+
+If you already have a cluster, please make sure that you have the AWS CLI installed, that
+you have `kubectl` installed, and that you switched to your cluster, using a command such as
+```shell
+aws eks update-kubeconfig --name <cluster>
+```
+
+If you don't have a cluster yet, you can [create one](https://docs.aws.amazon.com/eks/latest/userguide/getting-started.html).
+
+With prerequisites in place, just run
+```shell
+kubectl apply -f k8s-eks.yaml
+```
+
+It will create a namespace `nanoproxy`, a deployment there, and an ingress. After a few minutes, you can
+find the domain name of the  of the ingress:
+```shell
+kubectl -n nanoproxy get ingress
+```
+and connect to that domain name, port 80.
+
+After you're done, don't forget to remove all resources to avoid further charges:
+
+```shell
+kubectl delete -f k8s-eks.yaml
+```
