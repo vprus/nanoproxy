@@ -6,7 +6,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+	metrics "github.com/slok/go-http-metrics/metrics/prometheus"
+	slokMiddleware "github.com/slok/go-http-metrics/middleware"
+	"github.com/slok/go-http-metrics/middleware/std"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -45,6 +49,11 @@ func main() {
 	// RequestID and Recoverer middlewares are implicitly added by the logger.
 	r.Use(httplog.RequestLogger(log.Logger))
 
+	metricsMiddleware := slokMiddleware.New(slokMiddleware.Config{
+		Recorder: metrics.NewRecorder(metrics.Config{}),
+	})
+	r.Use(std.HandlerProvider("", metricsMiddleware))
+
 	url, _ := url.Parse(*target)
 	proxy := MakeProxy(url)
 	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +67,7 @@ func main() {
 		// AWS is fine with either 200, or 204.
 		writer.Write([]byte("{}"))
 	})
-
+	control.Get("/metrics", promhttp.Handler().ServeHTTP)
 	srvProxy := &http.Server{Addr: ":7070", Handler: r}
 	go func() {
 		if err := srvProxy.ListenAndServe(); err != nil && err != http.ErrServerClosed {
