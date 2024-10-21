@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog"
@@ -11,6 +12,13 @@ import (
 	metrics "github.com/slok/go-http-metrics/metrics/prometheus"
 	slokMiddleware "github.com/slok/go-http-metrics/middleware"
 	"github.com/slok/go-http-metrics/middleware/std"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	baseTrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -37,10 +45,42 @@ func MakeProxy(target *url.URL) *httputil.ReverseProxy {
 	return proxy
 }
 
+func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, error) {
+
+	otlpEndpoint := os.Getenv("OTLP_ENDPOINT")
+
+	if otlpEndpoint == "" {
+		return noop.NewTracerProvider(), nil
+	}
+
+	exp, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithEndpoint(fmt.Sprintf("%s:4318", otlpEndpoint)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exp),
+		trace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("nanoproxy"),
+		)),
+	)
+	return tp, nil
+}
+
 func main() {
 	flag.Parse()
 
 	r := chi.NewRouter()
+
+	tp, err := tracerProvider(context.Background())
+	if err != nil {
+		log.Fatal().Err(err).Msg("cannot initiate tracier")
+	}
+	otel.SetTracerProvider(tp)
+	tracer := tp.Tracer("component-main")
 
 	// If we run behind a load balancer, we want to know the real user IP address,
 	// not the load balancer address.
@@ -54,11 +94,23 @@ func main() {
 	})
 	r.Use(std.HandlerProvider("", metricsMiddleware))
 
+	r.Use(func(next http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			ctx, span := tracer.Start(r.Context(), "request")
+			defer span.End()
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		}
+		return http.HandlerFunc(fn)
+	})
+
 	url, _ := url.Parse(*target)
 	proxy := MakeProxy(url)
 	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-Remote-User", "vladimir")
-		proxy.ServeHTTP(w, r)
+		ctx, span := tracer.Start(r.Context(), "target request")
+		defer span.End()
+		proxy.ServeHTTP(w, r.WithContext(ctx))
 	}))
 
 	control := chi.NewRouter()
