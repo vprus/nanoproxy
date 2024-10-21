@@ -45,12 +45,12 @@ func MakeProxy(target *url.URL) *httputil.ReverseProxy {
 	return proxy
 }
 
-func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, error) {
+func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, *Shutdown, error) {
 
 	otlpEndpoint := os.Getenv("OTLP_ENDPOINT")
 
 	if otlpEndpoint == "" {
-		return noop.NewTracerProvider(), nil
+		return noop.NewTracerProvider(), nil, nil
 	}
 
 	exp, err := otlptracehttp.New(ctx,
@@ -58,7 +58,7 @@ func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, error) {
 		otlptracehttp.WithEndpoint(fmt.Sprintf("%s:4318", otlpEndpoint)),
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tp := trace.NewTracerProvider(
 		trace.WithBatcher(exp),
@@ -67,19 +67,32 @@ func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, error) {
 			semconv.ServiceName("nanoproxy"),
 		)),
 	)
-	return tp, nil
+	return tp, &Shutdown{
+		name: "tracing provider",
+		f:    tp.Shutdown,
+	}, nil
 }
+
+type Shutdown struct {
+	name string
+	f    func(ctx context.Context) error
+}
+
+var shutdowns = make([]Shutdown, 0)
 
 func main() {
 	flag.Parse()
 
 	r := chi.NewRouter()
 
-	tp, err := tracerProvider(context.Background())
+	tp, tracerShutdown, err := tracerProvider(context.Background())
 	if err != nil {
 		log.Fatal().Err(err).Msg("cannot initiate tracier")
 	}
 	otel.SetTracerProvider(tp)
+	if tracerShutdown != nil {
+		shutdowns = append(shutdowns, *tracerShutdown)
+	}
 	tracer := tp.Tracer("component-main")
 
 	// If we run behind a load balancer, we want to know the real user IP address,
@@ -126,6 +139,10 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to serve proxy")
 		}
 	}()
+	shutdowns = append(shutdowns, Shutdown{
+		name: "proxy server",
+		f:    srvProxy.Shutdown,
+	})
 
 	srvControl := &http.Server{Addr: ":9090", Handler: control}
 	go func() {
@@ -133,6 +150,10 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to serve control")
 		}
 	}()
+	shutdowns = append(shutdowns, Shutdown{
+		name: "control server",
+		f:    srvControl.Shutdown,
+	})
 
 	sigC := make(chan os.Signal, 1)
 	signal.Notify(sigC, syscall.SIGTERM, syscall.SIGINT)
@@ -142,9 +163,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { srvProxy.Shutdown(ctx); wg.Done() }()
-	go func() { srvControl.Shutdown(ctx); wg.Done() }()
+	wg.Add(len(shutdowns))
+	for _, s := range shutdowns {
+		go func() {
+			log.Info().Msgf("shutting down %s", s.name)
+			err := s.f(ctx)
+			if err != nil {
+				log.Error().Err(err).Msgf("shutting down %s failed", s.name)
+			} else {
+				log.Info().Msgf("shut down %s", s.name)
+			}
+			wg.Done()
+		}()
+	}
 	wg.Wait()
 
 	log.Info().Msg("app shutdown complete")
