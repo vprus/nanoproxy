@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog"
@@ -47,15 +46,15 @@ func MakeProxy(target *url.URL) *httputil.ReverseProxy {
 
 func tracerProvider(ctx context.Context) (baseTrace.TracerProvider, *Shutdown, error) {
 
-	otlpEndpoint := os.Getenv("OTLP_ENDPOINT")
-
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	// If endpoint is not specified, use no-op tracer to avoid warnings
 	if otlpEndpoint == "" {
 		return noop.NewTracerProvider(), nil, nil
 	}
 
 	exp, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithInsecure(),
-		otlptracehttp.WithEndpoint(fmt.Sprintf("%s:4318", otlpEndpoint)),
+		// OTEL_EXPORTER_OTLP_ENDPOINT will be used automatically
 	)
 	if err != nil {
 		return nil, nil, err
