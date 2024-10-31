@@ -9,7 +9,7 @@ projects which all have different ways to configure the same features.
 
 With docker, run 
 ```shell
-docker -p 7070:7070 ghcr.io/vprus/nanoproxy:main
+docker run -p 7070:7070 ghcr.io/vprus/nanoproxy:main
 ```
 and then connect to `http://localhost:7070`, which will proxy your request to `https://example.com`.
 
@@ -32,6 +32,45 @@ If you want to build yourself:
 go build .
 ./nanoproxy
 ```
+
+# Monitoring
+
+The proxy can export Prometheus-compatible metrics on port 9090. For example, if you run
+```shell
+docker run -p 7070:7070 -p 9090:9090 ghcr.io/vprus/nanoproxy:main
+```
+
+You can first connect to `http://localhost:7070` and then review metrics at `http://localhost:9090/metrics`
+
+# Tracining
+
+The proxy can also export traces to a tracing service that supports the Open Telemetry protocol. We'll use our
+old friend Jaeger. First, start it using the official recipe:
+
+```shell
+docker run --rm --name jaeger \
+  -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
+  -p 6831:6831/udp \
+  -p 6832:6832/udp \
+  -p 5778:5778 \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -p 14250:14250 \
+  -p 14268:14268 \
+  -p 14269:14269 \
+  -p 9411:9411 \
+  jaegertracing/all-in-one:1.62.0
+```
+
+Then, run nanoproxy, passing the path to jaeger:
+
+```
+docker run -p 7070:7070 -e OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318  ghcr.io/vprus/nanoproxy:main
+```
+
+Then, make a request to `http://localhost:7070`, go the Jaeger UI at `http://localhost:16686/`, select `nanoproxy` in
+the 'service' dropdown, and view the traces.
 
 # Running on Google Cloud with Kubernetes
 
