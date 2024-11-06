@@ -26,6 +26,9 @@ spec:
       containers:
         - image: ghcr.io/vprus/nanoproxy:main
           name: proxy
+          env:
+            - name: NANOPROXY_AUTH_TYPE
+              value: "alb"
           imagePullPolicy: Always
           livenessProbe:
             httpGet:
@@ -63,6 +66,45 @@ spec:
       targetPort: 9090
       name: control
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oauth
+  namespace: nanoproxy
+type: Opaque
+stringData:
+  clientId: <PLACEHODER: OAuth Client IP. No need to base64-encodoe>
+  clientSecret: <PLACEHOLDER: OAuth Client Secret. No need to base64-encode>
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-reader
+  namespace: nanoproxy
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alb-reads-secrets
+  namespace: nanoproxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: secret-reader
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: system:serviceaccount:kube-system:aws-load-balancer-controller
+---
 # For this ingress definition to do anything, you need an ingress controller, such as
 #   https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.6/
 #
@@ -74,19 +116,41 @@ metadata:
   labels:
     app: proxy
   annotations:
+    # Force SSL and specify the certificate
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-FS-1-2-Res-2020-10
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+
+    alb.ingress.kubernetes.io/certificate-arn: <PLACEHODER: certificate ARN>
+
+    # The following annotation make ALB use Google for authentication
+    alb.ingress.kubernetes.io/auth-type: oidc
+    alb.ingress.kubernetes.io/auth-idp-oidc: |
+      {
+        "issuer": "https://accounts.google.com",
+        "authorizationEndpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenEndpoint": "https://oauth2.googleapis.com/token",
+        "userInfoEndpoint": "https://openidconnect.googleapis.com/v1/userinfo",
+        "secretName": "oauth"
+      }
+    alb.ingress.kubernetes.io/auth-on-unauthenticated-request: authenticate
+    alb.ingress.kubernetes.io/auth-scope: 'email'
+
     # Route traffic directly to IP addresses of the pod.
     # The default alternative is using node port of the service, which
     # adds extra hop, and can break if there are too many nodes
     alb.ingress.kubernetes.io/target-type: ip
 
-    #·Use·control·point·for·health·checks
-    alb.ingress.kubernetes.io/healthcheck-path:·/ping
-    alb.ingress.kubernetes.io/healthcheck-port:·"9090"
+    # Use control point for health checks
+    alb.ingress.kubernetes.io/healthcheck-path: /ping
+    alb.ingress.kubernetes.io/healthcheck-port: "9090"
+
 spec:
   # This is important for ALB to process this ingress
   ingressClassName: alb
   rules:
-    - http:
+    - host: '<PLACEHOLDER: full domain name>'
+      http:
         paths:
           - path: /
             pathType: Prefix
