@@ -116,6 +116,11 @@ func main() {
 		return http.HandlerFunc(fn)
 	})
 
+	authType := os.Getenv("NANOPROXY_AUTH_TYPE")
+	if authType == "alb" {
+		r.Use(AlbUserAuthorizer)
+	}
+
 	url, _ := url.Parse(*target)
 	proxy := MakeProxy(url)
 	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
