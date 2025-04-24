@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog"
@@ -29,6 +30,8 @@ import (
 )
 
 var target = flag.String("target", "https://example.com", "the target to proxy to")
+var port = flag.Int("port", 7070, "the port to listen on")
+var controlPort = flag.Int("control-port", 9090, "the control port to listen on")
 
 func MakeProxy(target *url.URL) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -137,7 +140,7 @@ func main() {
 		writer.Write([]byte("{}"))
 	})
 	control.Get("/metrics", promhttp.Handler().ServeHTTP)
-	srvProxy := &http.Server{Addr: ":7070", Handler: r}
+	srvProxy := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: r}
 	go func() {
 		if err := srvProxy.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("failed to serve proxy")
@@ -148,7 +151,7 @@ func main() {
 		f:    srvProxy.Shutdown,
 	})
 
-	srvControl := &http.Server{Addr: ":9090", Handler: control}
+	srvControl := &http.Server{Addr: fmt.Sprintf(":%d", *controlPort), Handler: control}
 	go func() {
 		if err := srvControl.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("failed to serve control")
